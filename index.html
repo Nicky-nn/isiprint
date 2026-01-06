@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" style="background-color: #0a0a0f;">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ISIPRINT</title>
+    <style>
+      /* Prevent flash of unstyled content and ensure dark background in WebView */
+      html, body, #root {
+        background-color: #0a0a0f !important;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        color: #ffffff;
+      }
+    </style>
+  </head>
+
+  <body style="background-color: #0a0a0f; color: #ffffff;">
+    <div id="root" style="background-color: #0a0a0f; min-height: 100vh;"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

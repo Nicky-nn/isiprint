@@ -1,0 +1,44 @@
+[package]
+name = "print-client"
+version = "0.1.0"
+description = "Impresión Automática - ISIPRINT"
+authors = ["Nick"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "print_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-http = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+fnmatch-regex = "0.2"
+url = "2"
+log = "0.4"
+env_logger = "0.11"
+tempfile = "3"
+thiserror = "2"
+dirs = "6"
+# Servidor HTTP embebido
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+axum-extra = { version = "0.10", features = ["multipart"] }
+printpdf = { version = "0.7", features = ["svg"] }
+

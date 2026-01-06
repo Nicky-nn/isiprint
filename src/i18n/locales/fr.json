@@ -1,0 +1,94 @@
+{
+  "common": {
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "success": "Succès",
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "save": "Enregistrer",
+    "delete": "Supprimer",
+    "close": "Fermer",
+    "retry": "Réessayer",
+    "back": "Retour"
+  },
+  "auth": {
+    "login": "Connexion",
+    "logout": "Déconnexion",
+    "email": "Adresse e-mail",
+    "password": "Mot de passe",
+    "loginButton": "Se connecter",
+    "loggingIn": "Connexion en cours...",
+    "loginError": "Erreur d'authentification",
+    "invalidCredentials": "Identifiants invalides",
+    "sessionExpired": "Session expirée, veuillez vous reconnecter",
+    "verifyingSession": "Vérification de la session...",
+    "welcome": "Bienvenue",
+    "loggedInAs": "Connecté en tant que",
+    "welcomeBack": "Bienvenue",
+    "loginTitle": "Connexion",
+    "loginSubtitle": "Entrez vos identifiants pour accéder à votre compte",
+    "emailPlaceholder": "Adresse e-mail",
+    "passwordPlaceholder": "Entrez votre mot de passe",
+    "featureTitle1": "Impression Rapide",
+    "featureDesc1": "Imprimez vos documents instantanément depuis n'importe quelle application"
+  },
+  "nav": {
+    "account": "Compte",
+    "printers": "Imprimantes",
+    "logs": "Journaux"
+  },
+  "account": {
+    "title": "Mon Compte",
+    "licenseInfo": "Informations de Licence",
+    "productType": "Type de Produit",
+    "maxConnections": "Connexions Maximum",
+    "expirationDate": "Date d'Expiration",
+    "status": "Statut",
+    "noLicense": "Aucune licence active",
+    "printCount": "Impressions Effectuées"
+  },
+  "printers": {
+    "title": "Imprimantes",
+    "available": "Imprimantes Disponibles",
+    "select": "Sélectionner une Imprimante",
+    "paperSize": "Format papier (par imprimante)",
+    "paperThermal": "Thermique (par défaut)",
+    "paperCarta": "Lettre",
+    "paperOficio": "Legal/Oficio",
+    "paperCustom": "Personnalisé",
+    "paperHint": "Utilise mm. En thermique/personnalisé tu peux ajuster largeur/hauteur.",
+    "refresh": "Actualiser la Liste",
+    "testPrint": "Test d'Impression",
+    "cut": "Envoyer Coupe",
+    "noPrinters": "Aucune imprimante trouvée",
+    "default": "Par défaut",
+    "printing": "Impression en cours...",
+    "printSuccess": "Impression réussie",
+    "printError": "Erreur d'impression",
+    "selectFirst": "Veuillez d'abord sélectionner une imprimante"
+  },
+  "logs": {
+    "title": "Journaux Système",
+    "clear": "Effacer les Journaux",
+    "noLogs": "Aucun journal disponible",
+    "refresh": "Actualiser",
+    "level": "Niveau",
+    "message": "Message",
+    "timestamp": "Horodatage",
+    "clearConfirm": "Êtes-vous sûr de vouloir effacer les journaux?",
+    "cleared": "Journaux effacés"
+  },
+  "status": {
+    "active": "Actif",
+    "inactive": "Inactif",
+    "expired": "Expiré",
+    "connected": "Connecté",
+    "disconnected": "Déconnecté"
+  },
+  "language": {
+    "select": "Langue",
+    "es": "Español",
+    "en": "English",
+    "fr": "Français"
+  }
+}

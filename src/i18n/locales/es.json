@@ -1,0 +1,94 @@
+{
+  "common": {
+    "loading": "Cargando...",
+    "error": "Error",
+    "success": "Éxito",
+    "cancel": "Cancelar",
+    "confirm": "Confirmar",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "close": "Cerrar",
+    "retry": "Reintentar",
+    "back": "Volver"
+  },
+  "auth": {
+    "login": "Iniciar Sesión",
+    "logout": "Cerrar Sesión",
+    "email": "Correo Electrónico",
+    "password": "Contraseña",
+    "loginButton": "Ingresar",
+    "loggingIn": "Ingresando...",
+    "loginError": "Error de autenticación",
+    "invalidCredentials": "Credenciales inválidas",
+    "sessionExpired": "Sesión expirada, por favor inicie sesión nuevamente",
+    "verifyingSession": "Verificando sesión...",
+    "welcome": "Bienvenido",
+    "loggedInAs": "Conectado como",
+    "welcomeBack": "Bienvenido de nuevo",
+    "loginTitle": "Inicia Sesión",
+    "loginSubtitle": "Ingresa tus credenciales para acceder a tu cuenta",
+    "emailPlaceholder": "Correo electrónico",
+    "passwordPlaceholder": "Contraseña",
+    "featureTitle1": "Impresión Rápida",
+    "featureDesc1": "Imprime tus documentos al instante desde cualquier aplicación"
+  },
+  "nav": {
+    "account": "Cuenta",
+    "printers": "Impresoras",
+    "logs": "Registros"
+  },
+  "account": {
+    "title": "Mi Cuenta",
+    "licenseInfo": "Información de Licencia",
+    "productType": "Tipo de Producto",
+    "maxConnections": "Máximo de Conexiones",
+    "expirationDate": "Fecha de Vencimiento",
+    "status": "Estado",
+    "noLicense": "Sin licencia activa",
+    "printCount": "Impresiones Realizadas"
+  },
+  "printers": {
+    "title": "Impresoras",
+    "available": "Impresoras Disponibles",
+    "select": "Seleccionar Impresora",
+    "paperSize": "Tamaño de papel (por impresora)",
+    "paperThermal": "Térmica (por defecto)",
+    "paperCarta": "Carta",
+    "paperOficio": "Oficio",
+    "paperCustom": "Personalizado",
+    "paperHint": "Usa mm. En térmica/personalizado puedes ajustar ancho/alto.",
+    "refresh": "Actualizar Lista",
+    "testPrint": "Imprimir Prueba",
+    "cut": "Enviar Corte",
+    "noPrinters": "No se encontraron impresoras",
+    "default": "Predeterminada",
+    "printing": "Imprimiendo...",
+    "printSuccess": "Impresión exitosa",
+    "printError": "Error al imprimir",
+    "selectFirst": "Seleccione una impresora primero"
+  },
+  "logs": {
+    "title": "Registros del Sistema",
+    "clear": "Limpiar Registros",
+    "noLogs": "No hay registros disponibles",
+    "refresh": "Actualizar",
+    "level": "Nivel",
+    "message": "Mensaje",
+    "timestamp": "Fecha/Hora",
+    "clearConfirm": "¿Está seguro de limpiar los registros?",
+    "cleared": "Registros limpiados"
+  },
+  "status": {
+    "active": "Activo",
+    "inactive": "Inactivo",
+    "expired": "Expirado",
+    "connected": "Conectado",
+    "disconnected": "Desconectado"
+  },
+  "language": {
+    "select": "Idioma",
+    "es": "Español",
+    "en": "English",
+    "fr": "Français"
+  }
+}

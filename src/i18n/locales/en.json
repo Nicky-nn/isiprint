@@ -1,0 +1,94 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "delete": "Delete",
+    "close": "Close",
+    "retry": "Retry",
+    "back": "Back"
+  },
+  "auth": {
+    "login": "Sign In",
+    "logout": "Sign Out",
+    "email": "Email Address",
+    "password": "Password",
+    "loginButton": "Sign In",
+    "loggingIn": "Signing in...",
+    "loginError": "Authentication error",
+    "invalidCredentials": "Invalid credentials",
+    "sessionExpired": "Session expired, please sign in again",
+    "verifyingSession": "Verifying session...",
+    "welcome": "Welcome",
+    "loggedInAs": "Logged in as",
+    "welcomeBack": "Welcome back",
+    "loginTitle": "Sign In",
+    "loginSubtitle": "Enter your credentials to access your account",
+    "emailPlaceholder": "Email address",
+    "passwordPlaceholder": "Enter your password",
+    "featureTitle1": "Fast Printing",
+    "featureDesc1": "Print your documents instantly from any application"
+  },
+  "nav": {
+    "account": "Account",
+    "printers": "Printers",
+    "logs": "Logs"
+  },
+  "account": {
+    "title": "My Account",
+    "licenseInfo": "License Information",
+    "productType": "Product Type",
+    "maxConnections": "Maximum Connections",
+    "expirationDate": "Expiration Date",
+    "status": "Status",
+    "noLicense": "No active license",
+    "printCount": "Print Count"
+  },
+  "printers": {
+    "title": "Printers",
+    "available": "Available Printers",
+    "select": "Select Printer",
+    "paperSize": "Paper size (per printer)",
+    "paperThermal": "Thermal (default)",
+    "paperCarta": "Letter",
+    "paperOficio": "Legal/Oficio",
+    "paperCustom": "Custom",
+    "paperHint": "Use mm. In thermal/custom you can adjust width/height.",
+    "refresh": "Refresh List",
+    "testPrint": "Test Print",
+    "cut": "Send Cut",
+    "noPrinters": "No printers found",
+    "default": "Default",
+    "printing": "Printing...",
+    "printSuccess": "Print successful",
+    "printError": "Print error",
+    "selectFirst": "Please select a printer first"
+  },
+  "logs": {
+    "title": "System Logs",
+    "clear": "Clear Logs",
+    "noLogs": "No logs available",
+    "refresh": "Refresh",
+    "level": "Level",
+    "message": "Message",
+    "timestamp": "Timestamp",
+    "clearConfirm": "Are you sure you want to clear the logs?",
+    "cleared": "Logs cleared"
+  },
+  "status": {
+    "active": "Active",
+    "inactive": "Inactive",
+    "expired": "Expired",
+    "connected": "Connected",
+    "disconnected": "Disconnected"
+  },
+  "language": {
+    "select": "Language",
+    "es": "Español",
+    "en": "English",
+    "fr": "Français"
+  }
+}
