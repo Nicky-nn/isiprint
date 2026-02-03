@@ -4,6 +4,7 @@ import type {
   CommandResponse,
   LicenciaProducto,
   LogEntry,
+  NetworkPrinter,
   PrintJob,
   PrintSettings,
 } from "./types";
@@ -12,23 +13,22 @@ import type {
 // Uses multiple methods to detect Tauri environment
 export const isTauri = (): boolean => {
   if (typeof window === 'undefined') return false;
-  
+
   // Check for __TAURI__ global (Tauri v1)
   if ('__TAURI__' in window) return true;
-  
+
   // Check for __TAURI_INTERNALS__ (Tauri v2)
   if ('__TAURI_INTERNALS__' in window) return true;
-  
+
   // Check user agent
   if (navigator.userAgent.includes('Tauri')) return true;
-  
+
   return false;
 };
 
 // Safe invoke wrapper that checks if Tauri is available
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) {
-    console.warn(`Tauri not available, cannot invoke: ${cmd}`);
     throw new Error("Tauri API not available - running in browser mode");
   }
   return await tauriInvoke<T>(cmd, args);
@@ -86,9 +86,10 @@ export async function printPdfFromUrlWithSettings(
 
 export async function printTestPage(
   printerName: string,
-  settings: PrintSettings
+  settings: PrintSettings,
+  language?: string
 ): Promise<CommandResponse<string>> {
-  return await invoke("print_test_page", { printerName, settings });
+  return await invoke<CommandResponse<string>>("print_test_page", { printerName, settings, language });
 }
 
 export async function getPrintJobs(): Promise<CommandResponse<PrintJob[]>> {
@@ -109,4 +110,21 @@ export async function getLogs(): Promise<LogEntry[]> {
 
 export async function validateDomain(origin: string): Promise<boolean> {
   return await invoke("validate_domain", { origin });
+}
+
+// Network Discovery API
+export async function getLocalIp(): Promise<CommandResponse<string>> {
+  return await invoke("get_local_ip");
+}
+
+export async function scanNetworkPrinters(): Promise<CommandResponse<NetworkPrinter[]>> {
+  return await invoke("scan_network_printers");
+}
+
+export async function addNetworkPrinter(printer: NetworkPrinter): Promise<CommandResponse<string>> {
+  return await invoke("add_network_printer", { printer });
+}
+
+export async function removeNetworkPrinter(printerName: string): Promise<CommandResponse<string>> {
+  return await invoke("remove_network_printer", { printerName });
 }

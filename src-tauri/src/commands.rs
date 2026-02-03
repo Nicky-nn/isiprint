@@ -9,8 +9,10 @@ use printpdf::{BuiltinFont, Color, Mm, PdfDocument, Pt, Rgb};
 use printpdf::svg::{Svg, SvgTransform};
 use serde::{Deserialize, Serialize};
 use std::io::{BufWriter, Write};
+use std::time::SystemTime;
 use tauri::State;
-use tempfile::NamedTempFile;
+use tempfile::Builder;
+use tokio::time::{sleep, Duration};
 
 const ISIPRINT_LOGO_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1021 793">
     <g transform="translate(0,793) scale(0.1,-0.1)" fill="#000000">
@@ -129,11 +131,333 @@ fn settings_to_media(settings: &PrintSettings) -> (String, f64, f64) {
     }
 }
 
+fn is_pdf_printer(printer_name: &str) -> bool {
+    let n = printer_name.to_lowercase();
+    n.contains("pdf")
+}
+
+fn is_pdfwriter(printer_name: &str) -> bool {
+    printer_name.to_lowercase().contains("pdfwriter")
+}
+
+fn try_find_latest_pdfwriter_output() -> Option<String> {
+    // RWTS PDFwriter typically writes into: /private/var/spool/pdfwriter/<user>/
+    // We best-effort pick the most recently modified .pdf.
+    let user = std::env::var("USER").ok()?;
+    let dir = std::path::Path::new("/private/var/spool/pdfwriter").join(user);
+    let entries = std::fs::read_dir(&dir).ok()?;
+
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("pdf")) != Some(true) {
+            continue;
+        }
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified = match meta.modified() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        match &newest {
+            None => newest = Some((modified, path)),
+            Some((best_time, _)) if modified > *best_time => newest = Some((modified, path)),
+            _ => {}
+        }
+    }
+
+    newest.map(|(_, p)| p.to_string_lossy().to_string())
+}
+
+fn try_find_latest_pdfwriter_output_since(since: SystemTime) -> Option<String> {
+    let user = std::env::var("USER").ok()?;
+    let dir = std::path::Path::new("/private/var/spool/pdfwriter").join(user);
+    let entries = std::fs::read_dir(&dir).ok()?;
+
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("pdf"))
+            != Some(true)
+        {
+            continue;
+        }
+
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified = match meta.modified() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        // Must be newer than (or equal to) our start time.
+        if modified < since {
+            continue;
+        }
+
+        match &newest {
+            None => newest = Some((modified, path)),
+            Some((best_time, _)) if modified > *best_time => newest = Some((modified, path)),
+            _ => {}
+        }
+    }
+
+    newest.map(|(_, p)| p.to_string_lossy().to_string())
+}
+
+fn cups_job_key(printer_name: &str, job_id: i32) -> Option<String> {
+    if job_id <= 0 {
+        return None;
+    }
+    Some(format!("{}-{}", printer_name, job_id))
+}
+
+fn cups_job_seen_in_queue(printer_name: &str, job_id: i32) -> Result<bool, String> {
+    use std::process::Command;
+
+    let key = match cups_job_key(printer_name, job_id) {
+        Some(k) => k,
+        None => return Ok(true), // can't verify, don't block
+    };
+
+    let output = Command::new("lpstat")
+        .args(["-o", printer_name])
+        .output()
+        .map_err(|e| format!("Error executing lpstat: {}", e))?;
+
+    // If lpstat returns non-zero for an empty queue, treat as not seen.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.contains(&key))
+}
+
+fn cups_job_seen_in_completed(printer_name: &str, job_id: i32) -> Result<bool, String> {
+    use std::process::Command;
+
+    let key = match cups_job_key(printer_name, job_id) {
+        Some(k) => k,
+        None => return Ok(true), // can't verify, don't block
+    };
+
+    let output = Command::new("lpstat")
+        .args(["-W", "completed"])
+        .output()
+        .map_err(|e| format!("Error executing lpstat: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.contains(&key))
+}
+
+async fn verify_cups_job_visible(
+    printer_name: &str,
+    job_id: i32,
+    timeout: Duration,
+) -> Result<(), String> {
+    // Best-effort: only validates that CUPS has *record* of the job (queued or completed).
+    // This avoids returning a false "success" when CUPS silently drops a job.
+    let key = match cups_job_key(printer_name, job_id) {
+        Some(k) => k,
+        None => return Ok(()),
+    };
+
+    let step = Duration::from_millis(250);
+    let mut waited = Duration::from_millis(0);
+
+    while waited < timeout {
+        let in_queue = match cups_job_seen_in_queue(printer_name, job_id) {
+            Ok(v) => v,
+            Err(_e) => {
+                return Ok(());
+            }
+        };
+
+        let in_completed = match cups_job_seen_in_completed(printer_name, job_id) {
+            Ok(v) => v,
+            Err(_e) => {
+                return Ok(());
+            }
+        };
+
+        if in_queue || in_completed {
+            return Ok(());
+        }
+
+        sleep(step).await;
+        waited += step;
+    }
+
+    Err(format!(
+        "Print job {} was submitted but not observed in CUPS queue/completed within {:?}",
+        key, timeout
+    ))
+}
+
+fn normalize_language(language: Option<String>) -> String {
+    let raw = language.unwrap_or_else(|| "es".to_string());
+    let lower = raw.trim().to_lowercase();
+    if lower.starts_with("en") {
+        "en".to_string()
+    } else if lower.starts_with("fr") {
+        "fr".to_string()
+    } else {
+        "es".to_string()
+    }
+}
+
+struct TestPageText {
+    header_title: String,
+    header_status: String,
+    label_app: String,
+    label_install_status: String,
+    install_ok: String,
+    label_verification: String,
+    verification_ok: String,
+    paragraph: String,
+    section_details: String,
+    label_print_type: String,
+    label_printer: String,
+    label_profile: String,
+    label_paper: String,
+    label_size: String,
+    label_date: String,
+    label_time: String,
+    label_os: String,
+    print_type_roll: String,
+    print_type_sheet: String,
+}
+
+fn test_page_text(lang: &str) -> TestPageText {
+    match lang {
+        "en" => TestPageText {
+            header_title: "Print Test - ISIPRINT".to_string(),
+            header_status: "INSTALLATION OK".to_string(),
+            label_app: "Application".to_string(),
+            label_install_status: "Installation Status".to_string(),
+            install_ok: "Completed successfully".to_string(),
+            label_verification: "System Verification".to_string(),
+            verification_ok: "Successful".to_string(),
+            paragraph: "An automatic test print will now be performed to confirm that the system works correctly according to the selected configuration.".to_string(),
+            section_details: "Test Details".to_string(),
+            label_print_type: "Print Type".to_string(),
+            label_printer: "Printer".to_string(),
+            label_profile: "Profile".to_string(),
+            label_paper: "Paper".to_string(),
+            label_size: "Size".to_string(),
+            label_date: "Date".to_string(),
+            label_time: "Time".to_string(),
+            label_os: "OS".to_string(),
+            print_type_roll: "Roll format".to_string(),
+            print_type_sheet: "Sheet format".to_string(),
+        },
+        "fr" => TestPageText {
+            header_title: "Test d'impression - ISIPRINT".to_string(),
+            header_status: "INSTALLATION OK".to_string(),
+            label_app: "Application".to_string(),
+            label_install_status: "\u{00C9}tat de l'installation".to_string(),
+            install_ok: "Termin\u{00E9}e avec succ\u{00E8}s".to_string(),
+            label_verification: "V\u{00E9}rification du syst\u{00E8}me".to_string(),
+            verification_ok: "R\u{00E9}ussie".to_string(),
+            paragraph: "Une impression de test automatique va \u{00EA}tre effectu\u{00E9}e afin de confirmer que le syst\u{00E8}me fonctionne correctement selon la configuration s\u{00E9}lectionn\u{00E9}e.".to_string(),
+            section_details: "D\u{00E9}tails du test".to_string(),
+            label_print_type: "Type d'impression".to_string(),
+            label_printer: "Imprimante".to_string(),
+            label_profile: "Profil".to_string(),
+            label_paper: "Papier".to_string(),
+            label_size: "Taille".to_string(),
+            label_date: "Date".to_string(),
+            label_time: "Heure".to_string(),
+            label_os: "OS".to_string(),
+            print_type_roll: "Format rouleau".to_string(),
+            print_type_sheet: "Format feuille".to_string(),
+        },
+        _ => TestPageText {
+            header_title: "Prueba de Impresi\u{00F3}n - ISIPRINT".to_string(),
+            header_status: "INSTALACION CORRECTA".to_string(),
+            label_app: "Aplicaci\u{00F3}n".to_string(),
+            label_install_status: "Estado de Instalaci\u{00F3}n".to_string(),
+            install_ok: "Completada con \u{00E9}xito".to_string(),
+            label_verification: "Verificaci\u{00F3}n de Funcionamiento".to_string(),
+            verification_ok: "Exitosa".to_string(),
+            paragraph: "A continuaci\u{00F3}n se realizar\u{00E1} una prueba de impresi\u{00F3}n autom\u{00E1}tica para confirmar que el sistema funciona correctamente seg\u{00FA}n la configuraci\u{00F3}n seleccionada.".to_string(),
+            section_details: "Detalles de la Prueba".to_string(),
+            label_print_type: "Tipo de Impresi\u{00F3}n".to_string(),
+            label_printer: "Impresora".to_string(),
+            label_profile: "Perfil".to_string(),
+            label_paper: "Papel".to_string(),
+            label_size: "Tama\u{00F1}o".to_string(),
+            label_date: "Fecha".to_string(),
+            label_time: "Hora".to_string(),
+            label_os: "SO".to_string(),
+            print_type_roll: "Formato Rollo".to_string(),
+            print_type_sheet: "Formato Hoja".to_string(),
+        },
+    }
+}
+
+fn wrap_text_to_width(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let sep = if line.is_empty() { "" } else { " " };
+        if line.len() + sep.len() + word.len() > width {
+            if !line.is_empty() {
+                out.push(line);
+                line = String::new();
+            }
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
+fn center_line(text: &str, width: usize) -> String {
+    if text.len() >= width {
+        return text.to_string();
+    }
+    let pad = (width - text.len()) / 2;
+    format!("{}{}", " ".repeat(pad), text)
+}
+
+async fn verify_pdfwriter_output_visible(since: SystemTime, timeout: Duration) -> Result<String, String> {
+    let step = Duration::from_millis(250);
+    let mut waited = Duration::from_millis(0);
+
+    while waited < timeout {
+        if let Some(out) = try_find_latest_pdfwriter_output_since(since)
+            .or_else(try_find_latest_pdfwriter_output)
+        {
+            return Ok(out);
+        }
+        sleep(step).await;
+        waited += step;
+    }
+
+    Err(format!(
+        "PDFwriter accepted the job, but no output PDF was detected in spool within {:?}",
+        timeout
+    ))
+}
+
 fn generate_test_page_pdf(
     width_mm: f64,
     height_mm: f64,
     printer_name: &str,
     media: &str,
+    preset: &str,
+    language: &str,
 ) -> Result<Vec<u8>, String> {
     let (doc, page1, layer1) = PdfDocument::new(
         "ISIPRINT Test Page",
@@ -142,15 +466,16 @@ fn generate_test_page_pdf(
         "Layer 1",
     );
     let layer = doc.get_page(page1).get_layer(layer1);
-    let font = doc
+    let font_mono = doc
         .add_builtin_font(BuiltinFont::Courier)
         .map_err(|e| format!("Error loading font: {}", e))?;
 
     let now = Local::now();
-    let date = now.format("%Y-%m-%d").to_string();
-    let time = now.format("%H:%M:%S").to_string();
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
+
+    let lang = if language.is_empty() { "es" } else { language };
+    let txt = test_page_text(lang);
 
     // Logo SVG real (vector) - centrado arriba
     let logo_svg = Svg::parse(ISIPRINT_LOGO_SVG)
@@ -185,31 +510,87 @@ fn generate_test_page_pdf(
             },
         );
 
-    // Basic ASCII banner (safe for thermal widths too)
     layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
-    let mut y = (logo_y_mm as f32) - 10.0;
+
+    // Receipt-style layout (monospace)
+    let cols: usize = if width_mm <= 90.0 { 42 } else { 88 };
+    let divider = "=".repeat(cols);
+
+    let print_type = if preset.to_lowercase() == "thermal" {
+        txt.print_type_roll.clone()
+    } else {
+        txt.print_type_sheet.clone()
+    };
+
+    let size_str = format!("{}x{} mm", width_mm.round() as i32, height_mm.round() as i32);
+    let os_str = format!("{} {}", os, arch);
+    let date_str = match lang {
+        "en" => now.format("%Y-%m-%d").to_string(),
+        "fr" => now.format("%d/%m/%Y").to_string(),
+        _ => now.format("%d/%m/%Y").to_string(),
+    };
+    let time_str = match lang {
+        "en" => now.format("%H:%M:%S").to_string(),
+        "fr" => now.format("%H:%M:%S").to_string(),
+        _ => now.format("%H:%M:%S").to_string(),
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+
+    // Header (centered)
+    lines.push(divider.clone());
+    lines.push(center_line(&txt.header_title, cols));
+    lines.push(center_line(&txt.header_status, cols));
+    lines.push(divider.clone());
+    lines.push(String::new());
+
+    // Installation summary
+    lines.push(format!("{}: ISIPRINT", txt.label_app));
+    lines.push(format!("{}: {}", txt.label_install_status, txt.install_ok));
+    lines.push(format!("{}: {}", txt.label_verification, txt.verification_ok));
+    lines.push(String::new());
+
+    // Paragraph (wrapped)
+    for l in wrap_text_to_width(&txt.paragraph, cols) {
+        lines.push(l);
+    }
+    lines.push(String::new());
+
+    // Details section
+    lines.push(divider.clone());
+    lines.push(center_line(&txt.section_details, cols));
+    lines.push(divider.clone());
+    lines.push(String::new());
+
+    // Details list (matches sample style)
+    let mut detail = Vec::new();
+    detail.push(format!("-{}: {}", txt.label_print_type, print_type));
+    detail.push(format!("-{}: {}", txt.label_printer, printer_name));
+    detail.push(format!("-{}: {}", txt.label_profile, preset));
+    detail.push(format!("-{}: {}", txt.label_paper, media));
+    detail.push(format!("-{}: {}", txt.label_size, size_str));
+    detail.push(format!("-{}: {}", txt.label_date, date_str));
+    detail.push(format!("-{}: {}", txt.label_time, time_str));
+    detail.push(format!("-{}: {}", txt.label_os, os_str));
+
+    for l in detail {
+        for wrapped in wrap_text_to_width(&l, cols) {
+            lines.push(wrapped);
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(divider);
+
+    // Render lines below logo
     let left = 6.0_f32;
-
-    layer.use_text("ISIPRINT", 14.0, Mm(left), Mm(y), &font);
-    y -= 7.0;
-    layer.use_text("====================", 12.0, Mm(left), Mm(y), &font);
-    y -= 7.0;
-    layer.use_text("TEST PRINT", 12.0, Mm(left), Mm(y), &font);
-    y -= 10.0;
-
-    let lines = vec![
-        format!("Printer: {}", printer_name),
-        format!("Paper: {} ({}x{} mm)", media, width_mm.round() as i32, height_mm.round() as i32),
-        format!("OS: {} {}", os, arch),
-        format!("Date: {}", date),
-        format!("Time: {}", time),
-        "".to_string(),
-        "If you can read this, the printer is OK.".to_string(),
-    ];
+    let mut y = (logo_y_mm as f32) - 8.0;
+    let font_size = if width_mm <= 90.0 { 9.8 } else { 10.5 };
+    let line_h = if width_mm <= 90.0 { 5.5 } else { 6.0 };
 
     for line in lines {
-        layer.use_text(line, 10.0, Mm(left), Mm(y), &font);
-        y -= 6.0;
+        layer.use_text(line, font_size, Mm(left), Mm(y), &font_mono);
+        y -= line_h;
         if y < 10.0 {
             break;
         }
@@ -326,12 +707,36 @@ pub async fn print_pdf(
     }
 
     // Imprimir archivo
+    let since = SystemTime::now();
+
     match printer::print_file(&file_path, &printer_name) {
         Ok(job_id) => {
-            // Send cut command
-            if let Err(e) = printer::send_cut(&printer_name) {
+            if is_pdfwriter(&printer_name) {
+                match verify_pdfwriter_output_visible(since, Duration::from_secs(8)).await {
+                    Ok(out) => {
+                        let mut app_state = state.write().await;
+                        app_state.add_log("INFO", &format!("PDFwriter output detected: {}", out));
+                    }
+                    Err(e) => {
+                        let mut app_state = state.write().await;
+                        app_state.add_log("ERROR", &format!("PDFwriter verification failed: {}", e));
+                        return Ok(CommandResponse::error(&e));
+                    }
+                }
+            } else if let Err(e) =
+                verify_cups_job_visible(&printer_name, job_id, Duration::from_secs(3)).await
+            {
                 let mut app_state = state.write().await;
-                app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+                app_state.add_log("ERROR", &format!("CUPS verification failed: {}", e));
+                return Ok(CommandResponse::error(&e));
+            }
+
+            // Send cut command (only for thermal printers, never for PDF virtual printers)
+            if !is_pdf_printer(&printer_name) {
+                if let Err(e) = printer::send_cut(&printer_name) {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+                }
             }
 
             let mut app_state = state.write().await;
@@ -377,18 +782,47 @@ pub async fn print_pdf_with_settings(
 
     let (media, _w, _h) = settings_to_media(&settings);
 
-    match printer::print_file_with_media(&file_path, &printer_name, Some(&media)) {
-        Ok(_job_id) => {
-            if let Err(e) = printer::send_cut(&printer_name) {
+    let print_result = if is_pdf_printer(&printer_name) {
+        // PDF virtual printers often ignore/reject custom media sizes.
+        printer::print_file(&file_path, &printer_name)
+    } else {
+        printer::print_file_with_media(&file_path, &printer_name, Some(&media))
+    };
+
+    let since = SystemTime::now();
+
+    match print_result {
+        Ok(job_id) => {
+            if is_pdfwriter(&printer_name) {
+                if let Err(e) = verify_pdfwriter_output_visible(since, Duration::from_secs(8)).await {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("ERROR", &format!("PDFwriter verification failed: {}", e));
+                    return Ok(CommandResponse::error(&e));
+                }
+            } else if let Err(e) =
+                verify_cups_job_visible(&printer_name, job_id, Duration::from_secs(3)).await
+            {
                 let mut app_state = state.write().await;
-                app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+                app_state.add_log("ERROR", &format!("CUPS verification failed: {}", e));
+                return Ok(CommandResponse::error(&e));
+            }
+
+            // Cut is only meaningful for thermal printers.
+            if settings.preset.to_lowercase() == "thermal" && !is_pdf_printer(&printer_name) {
+                if let Err(e) = printer::send_cut(&printer_name) {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+                }
             }
 
             let mut app_state = state.write().await;
             app_state.print_count += 1;
-            app_state.add_log("INFO", "Print started (with settings)");
+            app_state.add_log("INFO", &format!("Print started (with settings). Job ID: {}", job_id));
 
-            Ok(CommandResponse::success("Print started".to_string()))
+            Ok(CommandResponse::success(format!(
+                "Print started. Job ID: {}",
+                job_id
+            )))
         }
         Err(e) => {
             let mut app_state = state.write().await;
@@ -418,7 +852,7 @@ pub async fn print_pdf_from_url(
             return Ok(CommandResponse::error("Print limit reached"));
         }
 
-        app_state.add_log("INFO", &format!("Downloading PDF from {}", pdf_url));
+        app_state.add_log("INFO", "Downloading PDF");
     }
 
     // Download PDF
@@ -431,19 +865,47 @@ pub async fn print_pdf_from_url(
         }
     };
 
-    // Save to temporary file
-    let mut temp_file = NamedTempFile::with_suffix(".pdf")
+    // Save to temporary file (use a recognizable name for PDF virtual printers)
+    let mut temp_file = Builder::new()
+        .prefix("isiprint_url_pdf_")
+        .suffix(".pdf")
+        .tempfile()
         .map_err(|e| format!("Error creating temp file: {}", e))?;
 
     temp_file
         .write_all(&pdf_data)
         .map_err(|e| format!("Error writing temp file: {}", e))?;
 
-    let temp_path = temp_file.path().to_string_lossy().to_string();
+    // Persist the temp file so it's not deleted when temp_file goes out of scope
+    let temp_path = temp_file
+        .into_temp_path()
+        .keep()
+        .map_err(|e| format!("Error persisting temp file: {}", e))?;
+    
+    let temp_path_str = temp_path.to_string_lossy().to_string();
 
     // Print
-    match printer::print_file(&temp_path, &printer_name) {
+    let since = SystemTime::now();
+
+    match printer::print_file(&temp_path_str, &printer_name) {
         Ok(job_id) => {
+            if is_pdfwriter(&printer_name) {
+                if let Err(e) = verify_pdfwriter_output_visible(since, Duration::from_secs(8)).await {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("ERROR", &format!("PDFwriter verification failed: {}", e));
+                    return Ok(CommandResponse::error(&e));
+                }
+            } else if let Err(e) =
+                verify_cups_job_visible(&printer_name, job_id, Duration::from_secs(3)).await
+            {
+                let mut app_state = state.write().await;
+                app_state.add_log("ERROR", &format!("CUPS verification failed: {}", e));
+                return Ok(CommandResponse::error(&e));
+            }
+
+            // Don't delete the temp file - let the system clean it up later
+            // Virtual printers like PDFwriter need time to process the file
+            
             if let Err(e) = printer::send_cut(&printer_name) {
                 let mut app_state = state.write().await;
                 app_state.add_log("WARN", &format!("Error sending cut: {}", e));
@@ -461,6 +923,7 @@ pub async fn print_pdf_from_url(
             ))
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&temp_path);
             let mut app_state = state.write().await;
             app_state.add_log("ERROR", &format!("Error printing PDF: {}", e));
             Ok(CommandResponse::error(&e))
@@ -489,7 +952,7 @@ pub async fn print_pdf_from_url_with_settings(
             return Ok(CommandResponse::error("Print limit reached"));
         }
 
-        app_state.add_log("INFO", &format!("Downloading PDF from {}", pdf_url));
+        app_state.add_log("INFO", "Downloading PDF");
     }
 
     let pdf_data = match printer::download_pdf(&pdf_url).await {
@@ -501,30 +964,73 @@ pub async fn print_pdf_from_url_with_settings(
         }
     };
 
-    let mut temp_file = NamedTempFile::with_suffix(".pdf")
+    let mut temp_file = Builder::new()
+        .prefix("isiprint_url_pdf_")
+        .suffix(".pdf")
+        .tempfile()
         .map_err(|e| format!("Error creating temp file: {}", e))?;
 
     temp_file
         .write_all(&pdf_data)
         .map_err(|e| format!("Error writing temp file: {}", e))?;
 
-    let temp_path = temp_file.path().to_string_lossy().to_string();
+    // Persist the temp file so it's not deleted when temp_file goes out of scope
+    let temp_path = temp_file
+        .into_temp_path()
+        .keep()
+        .map_err(|e| format!("Error persisting temp file: {}", e))?;
+    
+    let temp_path_str = temp_path.to_string_lossy().to_string();
     let (media, _w, _h) = settings_to_media(&settings);
 
-    match printer::print_file_with_media(&temp_path, &printer_name, Some(&media)) {
-        Ok(_job_id) => {
-            if let Err(e) = printer::send_cut(&printer_name) {
+    let print_result = if is_pdf_printer(&printer_name) {
+        printer::print_file(&temp_path_str, &printer_name)
+    } else {
+        printer::print_file_with_media(&temp_path_str, &printer_name, Some(&media))
+    };
+
+    let since = SystemTime::now();
+
+    match print_result {
+        Ok(job_id) => {
+            if is_pdfwriter(&printer_name) {
+                if let Err(e) = verify_pdfwriter_output_visible(since, Duration::from_secs(8)).await {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("ERROR", &format!("PDFwriter verification failed: {}", e));
+                    return Ok(CommandResponse::error(&e));
+                }
+            } else if let Err(e) =
+                verify_cups_job_visible(&printer_name, job_id, Duration::from_secs(3)).await
+            {
                 let mut app_state = state.write().await;
-                app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+                app_state.add_log("ERROR", &format!("CUPS verification failed: {}", e));
+                return Ok(CommandResponse::error(&e));
+            }
+
+            // Don't delete the temp file - let the system clean it up later.
+            // Virtual printers like PDFwriter need time to process the file.
+
+            if settings.preset.to_lowercase() == "thermal" && !is_pdf_printer(&printer_name) {
+                if let Err(e) = printer::send_cut(&printer_name) {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+                }
             }
 
             let mut app_state = state.write().await;
             app_state.print_count += 1;
-            app_state.add_log("INFO", "PDF printed from URL (with settings)");
+            app_state.add_log(
+                "INFO",
+                &format!("PDF printed from URL (with settings). Job ID: {}", job_id),
+            );
 
-            Ok(CommandResponse::success("PDF print started".to_string()))
+            Ok(CommandResponse::success(format!(
+                "PDF print started. Job ID: {}",
+                job_id
+            )))
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&temp_path);
             let mut app_state = state.write().await;
             app_state.add_log("ERROR", &format!("Error printing PDF: {}", e));
             Ok(CommandResponse::error(&e))
@@ -537,6 +1043,7 @@ pub async fn print_pdf_from_url_with_settings(
 pub async fn print_test_page(
     printer_name: String,
     settings: PrintSettings,
+    language: Option<String>,
     state: State<'_, SharedAppState>,
 ) -> Result<CommandResponse<String>, String> {
     {
@@ -555,32 +1062,148 @@ pub async fn print_test_page(
         app_state.add_log("INFO", &format!("Test print on {}", printer_name));
     }
 
-    let (media, width_mm, height_mm) = settings_to_media(&settings);
-    let pdf_data = generate_test_page_pdf(width_mm, height_mm, &printer_name, &media)?;
+    // Detectar si es una impresora de red creada por nosotros (Network_Printer_IP_PORT)
+    if printer_name.starts_with("Network_Printer_") {
+        // Formato: Network_Printer_192_168_1_100_9100
+        let parts: Vec<&str> = printer_name.split('_').collect();
+        if parts.len() >= 4 {
+            // Reconstruir IP (partes 2 a N-1)
+            let port_str = parts.last().unwrap();
+            
+            // La IP son todas las partes intermedias unidas por puntos
+            // Network (0), Printer (1), 192 (2), 168 (3), 1 (4), 100 (5), 9100 (6)
+            let ip_parts = &parts[2..parts.len()-1];
+            let ip = ip_parts.join(".");
+            
+            if let Ok(port) = port_str.parse::<u16>() {
+                // Usar RawPrinter para enviar ESC/POS directo
+                let raw_printer = crate::raw_printer::RawPrinter::new(&ip, port);
+                
+                // Intentar imprimir ticket de prueba ESC/POS
+                match raw_printer.print_test_receipt() {
+                    Ok(_) => {
+                        let mut app_state = state.write().await;
+                        app_state.print_count += 1;
+                        app_state.add_log("INFO", &format!("RAW Test Print sent to {}:{}", ip, port));
+                        return Ok(CommandResponse::success("RAW Test Print sent successfully".to_string()));
+                    }
+                    Err(e) => {
+                         let mut app_state = state.write().await;
+                         app_state.add_log("WARN", &format!("RAW Print failed, falling back to CUPS: {}", e));
+                         // Fallback a CUPS si falla el RAW directo
+                    }
+                }
+            }
+        }
+    }
 
-    let mut temp_file = NamedTempFile::with_suffix(".pdf")
+    let (media, width_mm, height_mm) = settings_to_media(&settings);
+
+    let lang = normalize_language(language);
+    let pdf_data = generate_test_page_pdf(
+        width_mm,
+        height_mm,
+        &printer_name,
+        &media,
+        &settings.preset,
+        &lang,
+    )?;
+
+    let mut temp_file = Builder::new()
+        .prefix("isiprint_test_page_")
+        .suffix(".pdf")
+        .tempfile()
         .map_err(|e| format!("Error creating temp file: {}", e))?;
 
     temp_file
         .write_all(&pdf_data)
         .map_err(|e| format!("Error writing temp file: {}", e))?;
 
-    let pdf_path = temp_file.path().to_string_lossy().to_string();
+    // Persist the temp file so it's not deleted when temp_file goes out of scope
+    // This is critical for virtual printers (like PDF printers) that need time to read the file
+    let pdf_path = temp_file
+        .into_temp_path()
+        .keep()
+        .map_err(|e| format!("Error persisting temp file: {}", e))?;
+    
+    let pdf_path_str = pdf_path.to_string_lossy().to_string();
+    
+    // No debug logs here (avoid leaking temp paths)
 
-    match printer::print_file_with_media(&pdf_path, &printer_name, Some(&media)) {
-        Ok(_job_id) => {
-            if let Err(e) = printer::send_cut(&printer_name) {
-                let mut app_state = state.write().await;
-                app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+    // Capture a reference time so we can detect new PDFwriter outputs.
+    let pdfwriter_since = SystemTime::now();
+
+    let print_result = if is_pdf_printer(&printer_name) {
+        // PDF virtual printers often ignore/reject custom media sizes.
+        printer::print_file(&pdf_path_str, &printer_name)
+    } else {
+        printer::print_file_with_media(&pdf_path_str, &printer_name, Some(&media))
+    };
+
+    match print_result {
+        Ok(job_id) => {
+            // No debug logs here
+
+            // Generic verification for non-PDFwriter printers (avoid false-positive success)
+            if !is_pdfwriter(&printer_name) {
+                if let Err(e) =
+                    verify_cups_job_visible(&printer_name, job_id, Duration::from_secs(3)).await
+                {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("ERROR", &format!("CUPS verification failed: {}", e));
+                    return Ok(CommandResponse::error(&e));
+                }
+            }
+            
+            // Don't delete the temp file - let the system clean it up later
+            // Virtual printers like PDFwriter need time to process the file
+            // The /tmp directory is cleaned automatically by the OS
+            
+            if settings.preset.to_lowercase() == "thermal" && !is_pdf_printer(&printer_name) {
+                if let Err(e) = printer::send_cut(&printer_name) {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("WARN", &format!("Error sending cut: {}", e));
+                }
             }
 
             let mut app_state = state.write().await;
             app_state.print_count += 1;
-            app_state.add_log("INFO", "Test page printed");
+            app_state.add_log("INFO", &format!("Test page printed successfully. Job ID: {}", job_id));
 
-            Ok(CommandResponse::success("Test page print started".to_string()))
+            // For PDFwriter, don't report success unless we can actually observe an output PDF
+            // appear in the expected spool folder. Otherwise, return an error (no false positives).
+            if is_pdfwriter(&printer_name) {
+                match verify_pdfwriter_output_visible(pdfwriter_since, Duration::from_secs(8)).await {
+                    Ok(out) => {
+                        let _ = out; // verified, but don't leak path in response
+                        return Ok(CommandResponse::success(format!(
+                            "Test page printed. Job ID: {}",
+                            job_id
+                        )));
+                    }
+                    Err(e) => {
+                        let mut app_state = state.write().await;
+                        app_state.add_log(
+                            "ERROR",
+                            &format!(
+                                "PDFwriter job {} submitted but no output PDF detected",
+                                job_id
+                            ),
+                        );
+                        return Ok(CommandResponse::error(&e));
+                    }
+                }
+            }
+
+            Ok(CommandResponse::success(format!(
+                "Test page print started. Job ID: {}",
+                job_id
+            )))
         }
         Err(e) => {
+            // Clean up on error
+            let _ = std::fs::remove_file(&pdf_path);
+            
             let mut app_state = state.write().await;
             app_state.add_log("ERROR", &format!("Test print error: {}", e));
             Ok(CommandResponse::error(&e))
@@ -760,6 +1383,124 @@ pub async fn logout(state: State<'_, SharedAppState>) -> Result<CommandResponse<
     }
     
     Ok(CommandResponse::success("Session closed".to_string()))
+}
+
+// ==================== NETWORK DISCOVERY COMMANDS ====================
+
+/// Obtener la IP local del dispositivo
+#[tauri::command]
+pub async fn get_local_ip(
+    state: State<'_, SharedAppState>,
+) -> Result<CommandResponse<String>, String> {
+    match crate::network_discovery::get_local_ip() {
+        Ok(ip) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("INFO", &format!("Local IP detected: {}", ip));
+            Ok(CommandResponse::success(ip))
+        }
+        Err(e) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("ERROR", &format!("Error getting local IP: {}", e));
+            Ok(CommandResponse::error(&e))
+        }
+    }
+}
+
+/// Escanear la red local en busca de impresoras
+#[tauri::command]
+pub async fn scan_network_printers(
+    state: State<'_, SharedAppState>,
+) -> Result<CommandResponse<Vec<crate::network_discovery::NetworkPrinter>>, String> {
+    let mut app_state = state.write().await;
+    app_state.add_log("INFO", "Starting network scan for printers...");
+    drop(app_state);
+
+    // Get local IP
+    let local_ip = match crate::network_discovery::get_local_ip() {
+        Ok(ip) => ip,
+        Err(e) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("ERROR", &format!("Cannot get local IP: {}", e));
+            return Ok(CommandResponse::error(&e));
+        }
+    };
+
+    // Get network range
+    let network_range = match crate::network_discovery::get_network_range(&local_ip) {
+        Ok(range) => range,
+        Err(e) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("ERROR", &format!("Cannot determine network range: {}", e));
+            return Ok(CommandResponse::error(&e));
+        }
+    };
+
+    // Scan network
+    match crate::network_discovery::scan_network_for_printers(&network_range).await {
+        Ok(printers) => {
+            let mut app_state = state.write().await;
+            app_state.add_log(
+                "INFO",
+                &format!("Network scan complete. Found {} printers", printers.len()),
+            );
+            Ok(CommandResponse::success(printers))
+        }
+        Err(e) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("ERROR", &format!("Network scan error: {}", e));
+            Ok(CommandResponse::error(&e))
+        }
+    }
+}
+
+/// Agregar una impresora de red al sistema
+#[tauri::command]
+pub async fn add_network_printer(
+    printer: crate::network_discovery::NetworkPrinter,
+    state: State<'_, SharedAppState>,
+) -> Result<CommandResponse<String>, String> {
+    let mut app_state = state.write().await;
+    app_state.add_log(
+        "INFO",
+        &format!("Adding network printer: {} ({}:{})", printer.name, printer.ip, printer.port),
+    );
+    drop(app_state);
+
+    match crate::network_discovery::add_network_printer_to_cups(&printer) {
+        Ok(message) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("INFO", &message);
+            Ok(CommandResponse::success(message))
+        }
+        Err(e) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("ERROR", &format!("Error adding printer: {}", e));
+            Ok(CommandResponse::error(&e))
+        }
+    }
+}
+
+/// Eliminar una impresora de red
+#[tauri::command]
+pub async fn remove_network_printer(
+    printer_name: String,
+    state: State<'_, SharedAppState>,
+) -> Result<CommandResponse<String>, String> {
+    match crate::network_discovery::remove_network_printer(&printer_name) {
+        Ok(()) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("INFO", &format!("Removed printer: {}", printer_name));
+            Ok(CommandResponse::success(format!(
+                "Printer {} removed successfully",
+                printer_name
+            )))
+        }
+        Err(e) => {
+            let mut app_state = state.write().await;
+            app_state.add_log("ERROR", &format!("Error removing printer: {}", e));
+            Ok(CommandResponse::error(&e))
+        }
+    }
 }
 
 // ==================== TESTS ====================

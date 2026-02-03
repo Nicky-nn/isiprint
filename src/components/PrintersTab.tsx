@@ -1,14 +1,21 @@
 import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
-import { getPrinters, printTestPage, sendCutCommand } from "../api";
+import {
+    getPrinters,
+    printTestPage,
+    sendCutCommand,
+    scanNetworkPrinters,
+    addNetworkPrinter,
+    getLocalIp,
+} from "../api";
 import { SimpleIcon } from "./LordIcon";
 import { AnimatedLogo } from "./AnimatedLogo";
-import type { PrintSettings } from "../types";
+import type { PrintSettings, NetworkPrinter } from "../types";
 import "./PrintersTab.css";
 
 export function PrintersTab() {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const [printers, setPrinters] = useState<string[]>([]);
     const [selectedPrinter, setSelectedPrinter] = useState<string>("");
     const [isLoading, setIsLoading] = useState(true);
@@ -20,6 +27,12 @@ export function PrintersTab() {
         type: "success" | "error";
         text: string;
     } | null>(null);
+
+    // Network discovery states
+    const [isScanning, setIsScanning] = useState(false);
+    const [networkPrinters, setNetworkPrinters] = useState<NetworkPrinter[]>([]);
+    const [localIp, setLocalIp] = useState<string>("");
+    const [showNetworkDiscovery, setShowNetworkDiscovery] = useState(false);
 
     const defaultSettings: PrintSettings = useMemo(
         () => ({ preset: "thermal", width_mm: 80, height_mm: 200 }),
@@ -72,7 +85,6 @@ export function PrintersTab() {
                 }
             }
         } catch (err) {
-            console.error("Error loading printers:", err);
         } finally {
             setIsLoading(false);
         }
@@ -93,10 +105,13 @@ export function PrintersTab() {
         try {
             setIsLoading(true);
             setMessage({ type: "success", text: t("printers.printing") });
+
             const response = await printTestPage(
                 selectedPrinter,
-                currentSettings
+                currentSettings,
+                i18n.language
             );
+
             if (response.success) {
                 setMessage({
                     type: "success",
@@ -139,7 +154,70 @@ export function PrintersTab() {
         }
     };
 
+    // Network discovery functions
+    const handleScanNetwork = async () => {
+        setIsScanning(true);
+        setMessage({ type: "success", text: t("printers.scanning") || "Escaneando red..." });
+
+        try {
+            // Get local IP first
+            const ipResponse = await getLocalIp();
+            if (ipResponse.success && ipResponse.data) {
+                setLocalIp(ipResponse.data);
+            }
+
+            // Scan network for printers
+            const response = await scanNetworkPrinters();
+
+            if (response.success && response.data) {
+                setNetworkPrinters(response.data);
+                setShowNetworkDiscovery(true);
+                setMessage({
+                    type: "success",
+                    text: `${t("printers.found") || "Encontradas"} ${response.data.length} ${t("printers.networkPrinters") || "impresoras en red"}`,
+                });
+            } else {
+                setMessage({
+                    type: "error",
+                    text: response.error || t("printers.scanError") || "Error al escanear la red",
+                });
+            }
+        } catch (err) {
+            setMessage({
+                type: "error",
+                text: t("printers.scanError") || "Error al escanear la red",
+            });
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    const handleAddNetworkPrinter = async (printer: NetworkPrinter) => {
+        try {
+            const response = await addNetworkPrinter(printer);
+            if (response.success) {
+                setMessage({
+                    type: "success",
+                    text: t("printers.printerAdded") || `Impresora ${printer.name} agregada`,
+                });
+                // Refresh printers list
+                await loadPrinters();
+            } else {
+                setMessage({
+                    type: "error",
+                    text: response.error || "Error al agregar impresora",
+                });
+            }
+        } catch (err) {
+            setMessage({
+                type: "error",
+                text: "Error al agregar impresora de red",
+            });
+        }
+    };
+
     useEffect(() => {
+
         if (message) {
             const timer = setTimeout(() => setMessage(null), 3000);
             return () => clearTimeout(timer);
@@ -260,11 +338,10 @@ export function PrintersTab() {
                         {printers.map((printer, index) => (
                             <motion.div
                                 key={printer}
-                                className={`printer-item ${
-                                    selectedPrinter === printer
-                                        ? "selected"
-                                        : ""
-                                }`}
+                                className={`printer-item ${selectedPrinter === printer
+                                    ? "selected"
+                                    : ""
+                                    }`}
                                 onClick={() => setSelectedPrinter(printer)}
                                 initial={{ opacity: 0, x: -20 }}
                                 animate={{ opacity: 1, x: 0 }}
@@ -449,7 +526,7 @@ export function PrintersTab() {
                                     border: "1px solid rgba(255,255,255,0.10)",
                                     background:
                                         currentSettings.preset === "custom" ||
-                                        currentSettings.preset === "thermal"
+                                            currentSettings.preset === "thermal"
                                             ? "#0f0f0f"
                                             : "rgba(255,255,255,0.04)",
                                     color: "#ffffff",
@@ -481,7 +558,7 @@ export function PrintersTab() {
                                     border: "1px solid rgba(255,255,255,0.10)",
                                     background:
                                         currentSettings.preset === "custom" ||
-                                        currentSettings.preset === "thermal"
+                                            currentSettings.preset === "thermal"
                                             ? "#0f0f0f"
                                             : "rgba(255,255,255,0.04)",
                                     color: "#ffffff",
@@ -503,10 +580,161 @@ export function PrintersTab() {
                 )}
             </motion.div>
 
+            {/* Network Discovery Card */}
+            <motion.div className="card" variants={itemVariants}>
+                <div className="card-header">
+                    <h3 className="card-title">
+                        {t("printers.networkDiscovery") || "Descubrimiento de Red"}
+                    </h3>
+                    <motion.button
+                        className="btn btn-primary"
+                        onClick={handleScanNetwork}
+                        disabled={isScanning}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        style={{
+                            background: isScanning
+                                ? "linear-gradient(135deg, #64748b 0%, #475569 100%)"
+                                : "linear-gradient(135deg, #88FCA4 0%, #60D98D 100%)",
+                            color: "#0a0a0a",
+                        }}
+                    >
+                        <SimpleIcon
+                            icon={isScanning ? "loading" : "refresh"}
+                            size={18}
+                            color="#0a0a0a"
+                            className={isScanning ? "animate-spin" : ""}
+                        />
+                        {isScanning
+                            ? t("printers.scanning") || "Escaneando..."
+                            : t("printers.scanNetwork") || "Escanear Red"}
+                    </motion.button>
+                </div>
+
+                {localIp && (
+                    <div
+                        style={{
+                            padding: "12px",
+                            background: "rgba(136,252,164,0.08)",
+                            borderRadius: "8px",
+                            marginBottom: "16px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                        }}
+                    >
+                        <SimpleIcon
+                            icon="globe"
+                            size={16}
+                            color="#88FCA4"
+                        />
+                        <span style={{ fontSize: "13px", color: "#88FCA4" }}>
+                            {t("printers.yourIp") || "Tu IP local"}: {localIp}
+                        </span>
+                    </div>
+                )}
+
+                {showNetworkDiscovery && (
+                    <AnimatePresence>
+                        {networkPrinters.length === 0 ? (
+                            <motion.div
+                                className="empty-state"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                            >
+                                <SimpleIcon
+                                    icon="printer"
+                                    size={32}
+                                    color="#94a3b8"
+                                />
+                                <p>
+                                    {t("printers.noPrintersFound") ||
+                                        "No se encontraron impresoras en la red"}
+                                </p>
+                            </motion.div>
+                        ) : (
+                            <div
+                                style={{
+                                    display: "grid",
+                                    gap: "8px",
+                                }}
+                            >
+                                {networkPrinters.map((printer, index) => (
+                                    <motion.div
+                                        key={`${printer.ip}-${printer.port}`}
+                                        initial={{ opacity: 0, x: -20 }}
+                                        animate={{ opacity: 1, x: 0 }}
+                                        transition={{ delay: index * 0.05 }}
+                                        style={{
+                                            padding: "16px",
+                                            background:
+                                                "linear-gradient(180deg, #161616, #0b0b0b)",
+                                            border: "1px solid rgba(136,252,164,0.2)",
+                                            borderRadius: "12px",
+                                            display: "flex",
+                                            justifyContent: "space-between",
+                                            alignItems: "center",
+                                        }}
+                                    >
+                                        <div
+                                            style={{
+                                                display: "flex",
+                                                flexDirection: "column",
+                                                gap: "4px",
+                                            }}
+                                        >
+                                            <span
+                                                style={{
+                                                    color: "#f5f5f5",
+                                                    fontWeight: 500,
+                                                }}
+                                            >
+                                                {printer.name}
+                                            </span>
+                                            <span
+                                                style={{
+                                                    fontSize: "12px",
+                                                    color: "rgba(255,255,255,0.6)",
+                                                }}
+                                            >
+                                                {printer.ip}:{printer.port} (
+                                                {printer.protocol.toUpperCase()})
+                                            </span>
+                                        </div>
+                                        <motion.button
+                                            className="btn btn-sm btn-primary"
+                                            onClick={() =>
+                                                handleAddNetworkPrinter(printer)
+                                            }
+                                            whileHover={{ scale: 1.05 }}
+                                            whileTap={{ scale: 0.95 }}
+                                            style={{
+                                                padding: "8px 16px",
+                                                fontSize: "13px",
+                                                background:
+                                                    "linear-gradient(135deg, #88FCA4 0%, #60D98D 100%)",
+                                                color: "#0a0a0a",
+                                                border: "none",
+                                                borderRadius: "8px",
+                                                cursor: "pointer",
+                                                fontWeight: 600,
+                                            }}
+                                        >
+                                            {t("printers.addPrinter") || "Agregar"}
+                                        </motion.button>
+                                    </motion.div>
+                                ))}
+                            </div>
+                        )}
+                    </AnimatePresence>
+                )}
+            </motion.div>
+
             {/* Actions Card */}
             <motion.div className="card" variants={itemVariants}>
                 <div className="card-header">
-                    <h3 className="card-title">Actions</h3>
+                    <h3 className="card-title">{t("account.action")}</h3>
                 </div>
 
                 <div className="actions-grid">

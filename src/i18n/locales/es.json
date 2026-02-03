@@ -45,7 +45,8 @@
     "expirationDate": "Fecha de Vencimiento",
     "status": "Estado",
     "noLicense": "Sin licencia activa",
-    "printCount": "Impresiones Realizadas"
+    "printCount": "Impresiones Realizadas",
+    "action": "Acción"
   },
   "printers": {
     "title": "Impresoras",
@@ -65,7 +66,17 @@
     "printing": "Imprimiendo...",
     "printSuccess": "Impresión exitosa",
     "printError": "Error al imprimir",
-    "selectFirst": "Seleccione una impresora primero"
+    "selectFirst": "Seleccione una impresora primero",
+    "networkDiscovery": "Descubrimiento de Red",
+    "scanNetwork": "Escanear Red",
+    "scanning": "Escaneando...",
+    "yourIp": "Tu IP local",
+    "found": "Encontradas",
+    "networkPrinters": "impresoras en red",
+    "noPrintersFound": "No se encontraron impresoras en la red",
+    "scanError": "Error al escanear la red",
+    "addPrinter": "Agregar",
+    "printerAdded": "Impresora agregada correctamente"
   },
   "logs": {
     "title": "Registros del Sistema",

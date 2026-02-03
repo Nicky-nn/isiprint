@@ -1,6 +1,6 @@
 [package]
-name = "print-client"
-version = "0.1.0"
+name = "ISIPRINT"
+version = "4.0.0"
 description = "Impresión Automática - ISIPRINT"
 authors = ["Nick"]
 edition = "2021"
@@ -41,4 +41,7 @@ axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
 axum-extra = { version = "0.10", features = ["multipart"] }
 printpdf = { version = "0.7", features = ["svg"] }
+# Network discovery
+local-ip-address = "0.6"
+ipnetwork = "0.21"
 

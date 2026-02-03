@@ -45,7 +45,8 @@
     "expirationDate": "Date d'Expiration",
     "status": "Statut",
     "noLicense": "Aucune licence active",
-    "printCount": "Impressions Effectuées"
+    "printCount": "Impressions Effectuées",
+    "action": "Action"
   },
   "printers": {
     "title": "Imprimantes",

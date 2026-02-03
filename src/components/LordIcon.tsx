@@ -96,7 +96,7 @@ export function LordIcon({
           }
         }
       } catch (error) {
-        console.error('Error loading LordIcon:', error);
+        // Ignore
       }
     };
 

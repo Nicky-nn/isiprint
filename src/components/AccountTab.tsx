@@ -25,7 +25,6 @@ export function AccountTab({ authState }: AccountTabProps) {
           setLicencias(response.data);
         }
       } catch (err) {
-        console.error('Error loading licenses:', err);
       } finally {
         setIsLoading(false);
       }
@@ -52,7 +51,7 @@ export function AccountTab({ authState }: AccountTabProps) {
         return <span className="badge badge-error" style={{ background: 'rgba(248,253,103,0.2)', color: '#F8FD67', padding: '4px 12px', borderRadius: '20px', fontSize: '12px' }}>{t('status.expired')}</span>;
       }
     } catch (e) {
-      console.error('Error parsing date:', licencia.fecha_vencimiento, e);
+        // Ignore parsing error
     }
     
     return <span className="badge badge-success" style={{ background: 'rgba(136,252,164,0.2)', color: '#88FCA4', padding: '4px 12px', borderRadius: '20px', fontSize: '12px' }}>{t('status.active')}</span>;

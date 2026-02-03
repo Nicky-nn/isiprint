@@ -2,8 +2,10 @@
 mod commands;
 mod graphql;
 mod http_server;
+mod network_discovery;
 mod persistence;
 mod printer;
+mod raw_printer;
 mod state;
 
 use state::AppState;
@@ -11,7 +13,7 @@ use std::sync::Arc;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     Emitter, Manager,
 };
 use tauri_plugin_autostart::MacosLauncher;
@@ -64,6 +66,12 @@ pub fn run() {
         ))
         .manage(shared_state)
         .setup(|app| {
+            // macOS: ocultar el icono del Dock (tray-only)
+            #[cfg(target_os = "macos")]
+            {
+                let _ = app.handle().set_dock_visibility(false);
+            }
+
             // Crear menú del tray
             let show_item = MenuItem::with_id(app, "show", "Abrir ISIPRINT", true, None::<&str>)?;
             let printers_item = MenuItem::with_id(app, "printers", "Ver Impresoras", true, None::<&str>)?;
@@ -79,23 +87,9 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .icon(tray_icon.into())
                 .menu(&menu)
-                .show_menu_on_left_click(false)
+                // Click izquierdo solo abre el menú, no la ventana (en todos los OS)
+                .show_menu_on_left_click(true)
                 .tooltip("ISIPRINT")
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        // Click izquierdo: mostrar ventana
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
@@ -143,6 +137,11 @@ pub fn run() {
             commands::get_auth_state,
             commands::verify_session,
             commands::logout,
+            // Network discovery commands
+            commands::get_local_ip,
+            commands::scan_network_printers,
+            commands::add_network_printer,
+            commands::remove_network_printer,
         ])
         .on_window_event(|window, event| {
             // Al cerrar la ventana, solo ocultarla (no cerrar la app)

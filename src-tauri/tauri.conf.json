@@ -21,10 +21,10 @@
         "resizable": false,
         "maximizable": false,
         "center": true,
-        "visible": true,
+        "visible": false,
         "decorations": true,
         "transparent": false,
-        "focus": true
+        "focus": false
       }
     ],
     "trayIcon": {

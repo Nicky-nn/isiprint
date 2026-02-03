@@ -311,10 +311,27 @@ async fn print_raw(
             .into_response();
     }
 
-    let path = temp_file.path().to_string_lossy().to_string();
+    // Persist the temp file so it's not deleted when temp_file goes out of scope
+    let path = match temp_file.into_temp_path().keep() {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PrintResponse {
+                    success: false,
+                    message: format!("Error persisting temp file: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let path_str = path.to_string_lossy().to_string();
 
-    match printer::print_file(&path, &printer_name) {
+    match printer::print_file(&path_str, &printer_name) {
         Ok(job_id) => {
+            // Don't delete the temp file - let the system clean it up later
+            // Virtual printers like PDFwriter need time to process the file
+            
             let msg = format!("Printed successfully. Job ID: {}", job_id);
             let log_entry = create_log_entry("success", format!("RAW print: {}", msg));
             if let Ok(mut app) = state.app_state.try_write() {
@@ -331,6 +348,8 @@ async fn print_raw(
             .into_response()
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            
             let log_entry = create_log_entry("error", format!("RAW print error: {}", e));
             if let Ok(mut app) = state.app_state.try_write() {
                 if app.logs.len() >= 100 {
@@ -432,7 +451,11 @@ async fn print_pdf(
     // Save to temporary file
     use tempfile::Builder;
 
-    let temp_file = match Builder::new().suffix(".pdf").tempfile() {
+    let temp_file = match Builder::new()
+        .prefix("isiprint_http_pdf_")
+        .suffix(".pdf")
+        .tempfile()
+    {
         Ok(f) => f,
         Err(e) => {
             return (
@@ -446,9 +469,24 @@ async fn print_pdf(
         }
     };
 
-    let path = temp_file.path().to_string_lossy().to_string();
+    // Persist the temp file so it's not deleted when temp_file goes out of scope
+    let path = match temp_file.into_temp_path().keep() {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PrintResponse {
+                    success: false,
+                    message: format!("Error persisting temp file: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let path_str = path.to_string_lossy().to_string();
     
     if let Err(e) = std::fs::write(&path, &pdf_bytes) {
+        let _ = std::fs::remove_file(&path);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(PrintResponse {
@@ -459,8 +497,11 @@ async fn print_pdf(
             .into_response();
     }
 
-    match printer::print_file(&path, &printer_name) {
+    match printer::print_file(&path_str, &printer_name) {
         Ok(job_id) => {
+            // Don't delete the temp file - let the system clean it up later
+            // Virtual printers like PDFwriter need time to process the file
+            
             let msg = format!("PDF printed successfully. Job ID: {}", job_id);
             let log_entry = create_log_entry("success", format!("PDF print: {}", msg));
             if let Ok(mut app) = state.app_state.try_write() {
@@ -477,6 +518,8 @@ async fn print_pdf(
             .into_response()
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            
             let log_entry = create_log_entry("error", format!("PDF print error: {}", e));
             if let Ok(mut app) = state.app_state.try_write() {
                 if app.logs.len() >= 100 {
@@ -568,7 +611,11 @@ async fn print_pdf_multipart(
     // Save to temporary file
     use tempfile::Builder;
 
-    let temp_file = match Builder::new().suffix(".pdf").tempfile() {
+    let temp_file = match Builder::new()
+        .prefix("isiprint_http_pdf_")
+        .suffix(".pdf")
+        .tempfile()
+    {
         Ok(f) => f,
         Err(e) => {
             return (
@@ -582,9 +629,24 @@ async fn print_pdf_multipart(
         }
     };
 
-    let path = temp_file.path().to_string_lossy().to_string();
+    // Persist the temp file so it's not deleted when temp_file goes out of scope
+    let path = match temp_file.into_temp_path().keep() {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PrintResponse {
+                    success: false,
+                    message: format!("Error persisting temp file: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let path_str = path.to_string_lossy().to_string();
     
     if let Err(e) = std::fs::write(&path, &data) {
+        let _ = std::fs::remove_file(&path);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(PrintResponse {
@@ -595,8 +657,11 @@ async fn print_pdf_multipart(
             .into_response();
     }
 
-    match printer::print_file(&path, &printer) {
+    match printer::print_file(&path_str, &printer) {
         Ok(job_id) => {
+            // Don't delete the temp file - let the system clean it up later
+            // Virtual printers like PDFwriter need time to process the file
+            
             let msg = format!("Multipart PDF printed. Job ID: {}", job_id);
             let log_entry = create_log_entry("success", format!("Multipart PDF print: {}", msg));
             if let Ok(mut app) = state.app_state.try_write() {
@@ -613,6 +678,8 @@ async fn print_pdf_multipart(
             .into_response()
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            
             let log_entry = create_log_entry("error", format!("Multipart PDF print error: {}", e));
             if let Ok(mut app) = state.app_state.try_write() {
                 if app.logs.len() >= 100 {

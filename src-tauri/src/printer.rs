@@ -106,8 +106,10 @@ pub fn print_file_with_media(
 
     // Verify file exists
     if !std::path::Path::new(file_path).exists() {
+        log::error!("File does not exist: {}", file_path);
         return Err(format!("File {} does not exist", file_path));
     }
+    
 
     let mut cmd = Command::new("lp");
     cmd.args(["-d", printer_name]);
@@ -116,24 +118,25 @@ pub fn print_file_with_media(
         cmd.args(["-o", &format!("media={}", media)]);
     }
     cmd.arg(file_path);
-
+    
     let output = cmd
         .output()
         .map_err(|e| format!("Error executing lp: {}", e))?;
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Print error: {}", stderr));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let job_id = stdout
         .split('-')
         .last()
         .and_then(|s| s.split_whitespace().next())
         .and_then(|s| s.parse::<i32>().ok())
         .unwrap_or(0);
-
+    
     Ok(job_id)
 }
 

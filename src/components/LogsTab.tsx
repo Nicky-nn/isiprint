@@ -26,7 +26,6 @@ export function LogsTab() {
       const logsList = await getLogs();
       setLogs(logsList.reverse()); // Newest first
     } catch (err) {
-      console.error('Error loading logs:', err);
     } finally {
       setIsLoading(false);
     }
@@ -40,7 +39,6 @@ export function LogsTab() {
       await clearPrintJobs();
       setLogs([]);
     } catch (err) {
-      console.error('Error clearing logs:', err);
     } finally {
       setIsClearing(false);
     }

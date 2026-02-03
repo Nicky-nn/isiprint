@@ -44,3 +44,11 @@ export interface PrintSettings {
   width_mm?: number;
   height_mm?: number;
 }
+
+export interface NetworkPrinter {
+  ip: string;
+  port: number;
+  protocol: string;
+  name: string;
+  is_online: boolean;
+}

@@ -45,7 +45,8 @@
     "expirationDate": "Expiration Date",
     "status": "Status",
     "noLicense": "No active license",
-    "printCount": "Print Count"
+    "printCount": "Print Count",
+    "action": "Action"
   },
   "printers": {
     "title": "Printers",
