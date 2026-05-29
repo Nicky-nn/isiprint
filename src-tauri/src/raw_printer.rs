@@ -127,4 +127,168 @@ impl RawPrinter {
         // 7. Enviar
         self.print_bytes(&buffer)
     }
+
+    /// Imprimir una imagen (convirtiéndola a ESC/POS Raster)
+    pub fn print_image(&self, img: &image::DynamicImage) -> Result<(), String> {
+        let width = img.width();
+        let height = img.height();
+        
+        // Convertir a escala de grises (luma8)
+        let gray_img = img.to_luma8();
+        
+        // Ancho en bytes (8 pixeles por byte)
+        let width_bytes = (width + 7) / 8;
+        
+        // Buffer de comandos
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(INIT);
+        buffer.extend_from_slice(ALIGN_CENTER);
+        
+        // Comando GS v 0 (Raster Bit Image)
+        // GS v 0 m xL xH yL yH d1...dk
+        // m=0 (density normal), xL/xH = width bytes, yL/yH = height lines
+        
+        buffer.extend_from_slice(&[GS, b'v', b'0', 0]);
+        buffer.push((width_bytes & 0xFF) as u8);
+        buffer.push(((width_bytes >> 8) & 0xFF) as u8);
+        buffer.push((height & 0xFF) as u8);
+        buffer.push(((height >> 8) & 0xFF) as u8);
+        
+        for y in 0..height {
+            for x_byte in 0..width_bytes {
+                let mut byte = 0u8;
+                for bit in 0..8 {
+                    let x = x_byte * 8 + bit;
+                    if x < width {
+                        // Obtener pixel (negro es < 128)
+                        let pixel = gray_img.get_pixel(x, y)[0];
+                        if pixel < 128 {
+                            byte |= 1 << (7 - bit);
+                        }
+                    }
+                }
+                buffer.push(byte);
+            }
+        }
+        
+        buffer.extend_from_slice(b"\n\n\n\n"); // Feed
+        buffer.extend_from_slice(CUT);
+        
+        self.print_bytes(&buffer)
+    }
+    
+    /// Imprimir PDF renderizándolo primero a imagen (macOS/native)
+    pub fn print_pdf_renderer(&self, pdf_path: &str) -> Result<(), String> {
+        use std::process::Command;
+        use std::fs;
+        use std::path::Path;
+
+        // Verificar que el PDF de entrada existe y tiene contenido
+        let pdf_meta = fs::metadata(pdf_path)
+            .map_err(|e| format!("Input PDF check failed: {}", e))?;
+        if pdf_meta.len() == 0 {
+            return Err("Input PDF file is empty".to_string());
+        }
+        
+        println!("DEBUG: Input PDF path: {}, Size: {}", pdf_path, pdf_meta.len());
+
+        let temp_dir = std::env::temp_dir();
+        let uuid = uuid::Uuid::new_v4();
+        
+        // COPIA DE SEGURIDAD: Copiar el PDF a un nuevo archivo temporal
+        // Esto evita problemas si el archivo original tiene permisos raros o está en uso
+        let safe_pdf_name = format!("isiprint_input_{}.pdf", uuid);
+        let safe_pdf_path = temp_dir.join(safe_pdf_name);
+        fs::copy(pdf_path, &safe_pdf_path)
+            .map_err(|e| format!("Failed to copy input PDF to safe location: {}", e))?;
+            
+        let safe_pdf_path_str = safe_pdf_path.to_string_lossy().to_string();
+        println!("DEBUG: Safe PDF path: {}", safe_pdf_path_str);
+
+        // 1. Generar ruta temporal para PNG
+        let png_name = format!("isiprint_render_{}.png", uuid);
+        let png_path = temp_dir.join(png_name);
+        let png_path_str = png_path.to_string_lossy().to_string();
+        
+        println!("DEBUG: Output PNG path: {}", png_path_str);
+        
+        // 2. Usar 'sips' (macOS) para convertir PDF a PNG
+        let mut conversion_success = false;
+        
+        #[cfg(target_os = "macos")]
+        {
+            // Intento 1: sips
+            println!("DEBUG: Trying sips conversion...");
+            let output = Command::new("sips")
+                .args(["-s", "format", "png", &safe_pdf_path_str, "--out", &png_path_str])
+                .output()
+                .map_err(|e| format!("Error executing sips: {}", e))?;
+                
+            if output.status.success() {
+                conversion_success = true;
+                println!("DEBUG: sips conversion successful");
+            } else {
+                println!("DEBUG: sips failed. Stderr: {}", String::from_utf8_lossy(&output.stderr));
+                println!("DEBUG: Trying qlmanage fallback...");
+                
+                // Intento 2: qlmanage (QuickLook)
+                // qlmanage -t -s 1000 -o <dir> <file>
+                // Genera <file>.png en <dir>
+                let output_ql = Command::new("qlmanage")
+                    .args(["-t", "-s", "1000", "-o", temp_dir.to_str().unwrap(), &safe_pdf_path_str])
+                    .output()
+                    .map_err(|e| format!("Error executing qlmanage: {}", e))?;
+                    
+                // qlmanage es ruidoso, verificamos si el archivo esperado existe
+                // El nombre generado suele ser "<nombre_pdf>.png"
+                let expected_ql_output = format!("{}.png", safe_pdf_path_str);
+                let expected_path = Path::new(&expected_ql_output);
+                
+                if expected_path.exists() {
+                     // Mover al path esperado (png_path)
+                     fs::rename(expected_path, &png_path)
+                        .map_err(|e| format!("Error moving qlmanage output: {}", e))?;
+                     conversion_success = true;
+                     println!("DEBUG: qlmanage conversion successful");
+                } else {
+                     println!("DEBUG: qlmanage failed. Output file not found: {}", expected_ql_output);
+                     println!("DEBUG: qlmanage stderr: {}", String::from_utf8_lossy(&output_ql.stderr));
+                     
+                     // Limpiar intentos fallidos
+                     let _ = fs::remove_file(&png_path);
+                }
+            }
+        }
+
+        // Limpiar el PDF seguro temporal
+        let _ = fs::remove_file(&safe_pdf_path);
+        
+        #[cfg(not(target_os = "macos"))]
+        return Err("Internal PDF rendering only supported on macOS currently".to_string());
+        
+        if !conversion_success {
+             return Err("PDF rendering failed with both sips and qlmanage".to_string());
+        }
+        
+        // 3. Cargar imagen con librería 'image'
+        let img = image::open(&png_path)
+            .map_err(|e| {
+                let _ = fs::remove_file(&png_path); // Limpiar
+                format!("Error loading rendered image: {}", e)
+            })?;
+        
+        // Limpiar archivo temporal PNG una vez cargado en memoria
+        let _ = fs::remove_file(&png_path);
+            
+        // 4. Redimensionar si es muy ancha (max 512px o 576px para térmicas 80mm standard)
+        let target_width = 570;
+        let final_img = if img.width() > target_width {
+            img.resize(target_width, (target_width * img.height()) / img.width(), image::imageops::FilterType::Triangle)
+        } else {
+            img
+        };
+        
+        // 5. Imprimir imagen procesada
+        self.print_image(&final_img)
+    }
 }

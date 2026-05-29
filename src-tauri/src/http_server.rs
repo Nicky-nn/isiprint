@@ -657,7 +657,33 @@ async fn print_pdf_multipart(
             .into_response();
     }
 
-    match printer::print_file(&path_str, &printer) {
+    // Check for Network Printer (Driverless RAW)
+    let raw_print_result = if printer.starts_with("Network_Printer_") {
+        let parts: Vec<&str> = printer.split('_').collect();
+        if parts.len() >= 4 {
+            let port_str = parts.last().unwrap();
+            let ip_parts = &parts[2..parts.len()-1];
+            let ip = ip_parts.join(".");
+            
+            if let Ok(port) = port_str.parse::<u16>() {
+                let raw_printer = crate::raw_printer::RawPrinter::new(&ip, port);
+                // Usar el renderizador PDF -> Imagen -> ESC/POS
+                match raw_printer.print_pdf_renderer(&path_str) {
+                    Ok(_) => Some(Ok(0)), // 0 as dummy job ID
+                    Err(e) => Some(Err(e)),
+                }
+            } else { None }
+        } else { None }
+    } else {
+        None
+    };
+
+    let print_result = match raw_print_result {
+        Some(res) => res,
+        None => printer::print_file(&path_str, &printer),
+    };
+
+    match print_result {
         Ok(job_id) => {
             // Don't delete the temp file - let the system clean it up later
             // Virtual printers like PDFwriter need time to process the file

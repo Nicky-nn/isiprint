@@ -887,7 +887,34 @@ pub async fn print_pdf_from_url(
     // Print
     let since = SystemTime::now();
 
-    match printer::print_file(&temp_path_str, &printer_name) {
+    // Check for Network Printer (Driverless RAW)
+    let raw_print_result = if printer_name.starts_with("Network_Printer_") {
+        let parts: Vec<&str> = printer_name.split('_').collect();
+        if parts.len() >= 4 {
+            let port_str = parts.last().unwrap();
+            let ip_parts = &parts[2..parts.len()-1];
+            let ip = ip_parts.join(".");
+            
+            if let Ok(port) = port_str.parse::<u16>() {
+                let raw_printer = crate::raw_printer::RawPrinter::new(&ip, port);
+                // Usar el renderizador PDF -> Imagen -> ESC/POS
+                match raw_printer.print_pdf_renderer(&temp_path_str) {
+                    Ok(_) => Some(Ok(0)), // 0 as dummy job ID
+                    Err(e) => Some(Err(e)),
+                }
+            } else { None }
+        } else { None }
+    } else {
+        None
+    };
+
+    // Use raw result or standard CUPS print
+    let print_result = match raw_print_result {
+        Some(res) => res,
+        None => printer::print_file(&temp_path_str, &printer_name),
+    };
+
+    match print_result {
         Ok(job_id) => {
             if is_pdfwriter(&printer_name) {
                 if let Err(e) = verify_pdfwriter_output_visible(since, Duration::from_secs(8)).await {
@@ -983,10 +1010,36 @@ pub async fn print_pdf_from_url_with_settings(
     let temp_path_str = temp_path.to_string_lossy().to_string();
     let (media, _w, _h) = settings_to_media(&settings);
 
-    let print_result = if is_pdf_printer(&printer_name) {
-        printer::print_file(&temp_path_str, &printer_name)
+    // Check for Network Printer (Driverless RAW)
+    let raw_print_result = if printer_name.starts_with("Network_Printer_") {
+        let parts: Vec<&str> = printer_name.split('_').collect();
+        if parts.len() >= 4 {
+            let port_str = parts.last().unwrap();
+            let ip_parts = &parts[2..parts.len()-1];
+            let ip = ip_parts.join(".");
+            
+            if let Ok(port) = port_str.parse::<u16>() {
+                let raw_printer = crate::raw_printer::RawPrinter::new(&ip, port);
+                // Usar el renderizador PDF -> Imagen -> ESC/POS
+                match raw_printer.print_pdf_renderer(&temp_path_str) {
+                    Ok(_) => Some(Ok(0)), // 0 as dummy job ID
+                    Err(e) => Some(Err(e)),
+                }
+            } else { None }
+        } else { None }
     } else {
-        printer::print_file_with_media(&temp_path_str, &printer_name, Some(&media))
+        None
+    };
+
+    let print_result = match raw_print_result {
+        Some(res) => res,
+        None => {
+            if is_pdf_printer(&printer_name) {
+                printer::print_file(&temp_path_str, &printer_name)
+            } else {
+                printer::print_file_with_media(&temp_path_str, &printer_name, Some(&media))
+            }
+        }
     };
 
     let since = SystemTime::now();
@@ -999,12 +1052,15 @@ pub async fn print_pdf_from_url_with_settings(
                     app_state.add_log("ERROR", &format!("PDFwriter verification failed: {}", e));
                     return Ok(CommandResponse::error(&e));
                 }
-            } else if let Err(e) =
-                verify_cups_job_visible(&printer_name, job_id, Duration::from_secs(3)).await
-            {
-                let mut app_state = state.write().await;
-                app_state.add_log("ERROR", &format!("CUPS verification failed: {}", e));
-                return Ok(CommandResponse::error(&e));
+            } else if job_id > 0 {
+                // Verify CUPS job only if it's a real CUPS job (ID > 0)
+                if let Err(e) =
+                    verify_cups_job_visible(&printer_name, job_id, Duration::from_secs(3)).await
+                {
+                    let mut app_state = state.write().await;
+                    app_state.add_log("ERROR", &format!("CUPS verification failed: {}", e));
+                    return Ok(CommandResponse::error(&e));
+                }
             }
 
             // Don't delete the temp file - let the system clean it up later.
